@@ -18,6 +18,9 @@ dpath = "~/data/timp/dem_20m/Wstch_gtr_2400m_20m_grid.tif"
 timp_storage = "~/olson/glacier-data/rg-wasatch/timp" # UVU group
 ftype = ".tif" # ".grd"
 # "~/molson/" 
+# ls ~/olson/glacier-data/rg-wasatch/timp/tf_series
+# cp -a ~/olson/glacier-data/rg-wasatch/timp/tf_series /uufs/chpc.utah.edu/common/home/u1037042/data/timp/rad_results
+
 
 # TO DO
 # Add gauss filter to DEM
@@ -38,18 +41,25 @@ topo.bounds <- function(dpath, subset=TRUE){
   dem <<- raster(dpath)
 
   if(subset){
-    #
-    pts = cbind(445079.2, 4487065) # subset DEM to cottonwoods and TIMP
+    # 
+    # Cottonwoods and Timpanogos
+    pts = cbind(445079.2, 4487065) # subset DEM
     pt = SpatialPoints(coords = pts, proj4string = crs(dem))
-    b1 = buffer(pt, 2e4)
+    b1 = buffer(pt, 2.1e4)
     dem <<- crop(dem, b1)
     
-    # Zoom to timp
-    pts = cbind(445173.4, 4471190) # subset DEM to Timp
-    pt = SpatialPoints(coords = pts, proj4string = crs(dem))
-    # b1 = buffer(pt, 2e3)
-    b1 = buffer(pt, 5.4e3)
-    dem <<- crop(dem, b1)
+    # Only Timpanogos
+    # pts = cbind(445173.4, 4471190) # subset DEM to Timp
+    # pt = SpatialPoints(coords = pts, proj4string = crs(dem))
+    # # b1 = buffer(pt, 2e3)
+    # b1 = buffer(pt, 5.4e3)
+    # dem <<- crop(dem, b1)
+    
+    # Central Wasatch
+    # pts = cbind(445079.2, 4479300) # subset DEM 
+    # pt = SpatialPoints(coords = pts, proj4string = crs(dem))
+    # b1 = buffer(pt, 3.1e4)
+    # dem <<- crop(dem, b1)
   }
   
   # BOUNDARY - for computational spatial trasformations
@@ -277,7 +287,7 @@ topo.sw.multiday.wrapper <- function(month = "03", year = "2021", dpath, start_d
   strt = Sys.time()
   
   # month time series
-  start_date <- as.Date(paste0("01", month,year), "%d%m%Y")
+  start_date <- as.Date(paste0("01", month, year), "%d%m%Y")
   end_date <- seq(start_date, length.out = 2, by = "month")[2]
   dates_ls <- seq(start_date, end_date - 1, by  = "day")
   
@@ -322,11 +332,12 @@ topo.sw.multiday.wrapper <- function(month = "03", year = "2021", dpath, start_d
   
   # stack
   small_grid = FALSE
-  topo_stk <- stack(array.to.raster(day_topo_sum, dem, small=small_grid),
+  topo_stk <- stack(array.to.raster(day_norm_sum, dem, small=small_grid),
+                    array.to.raster(day_topo_sum, dem, small=small_grid),
                     array.to.raster(day_topo_factor, dem, small=small_grid),
                     array.to.raster(day_topo_f1, dem, small=small_grid),
                     array.to.raster(day_shade_sum, dem, small=small_grid) )
-  names(topo_stk) <- c("tot_insol", "topo_factor", "topo_norm", "shade_hrs")
+  names(topo_stk) <- c("norm_insol", "tot_insol", "topo_factor", "topo_norm", "shade_hrs")
   topo_stk <- mask(topo_stk, dem)
   
   # ONLY works for smaller dataset
@@ -341,10 +352,11 @@ topo.sw.multiday.wrapper <- function(month = "03", year = "2021", dpath, start_d
   # STACK AND SAVE
   if(!is.null(save_path)){
     # name
-    dmoment_char <- paste0("tf_series_", gsub('-','_', paste0(dates_ls[1], "__", dates_ls[length(dates_ls)])))
+    # dmoment_char <- paste0("tf_series_", gsub('-','_', paste0(dates_ls[1], "__", dates_ls[length(dates_ls)])))
+    dmoment_char <- paste0("tf_series_m", format(dates_ls[1], "%m"))
     sname = paste0("clearsky_", dmoment_char,  ftype)
     # save
-    writeRaster(topo_stk, file.path(save_path, "tf_series", sname))
+    writeRaster(topo_stk, file.path(save_path, "tf_series2", sname))
   }
   
   # end time
@@ -379,7 +391,10 @@ topo.sw.monthly.save.wrapper <- function(start_month = NULL, end_month = NULL, y
 
   for(ml in 1:length(months_ls)){
     # run current month
-    topo.sw.multiday.wrapper(month = months_ls[ml], year = year, dpath, start_day = NULL, end_day = NULL, 
+    if(months_ls[ml]< 10){
+      mostr = paste0("0", months_ls[ml])
+    }else{mostr = months_ls[ml]}
+    topo.sw.multiday.wrapper(month = mostr, year = year, dpath, start_day = NULL, end_day = NULL, 
                              save_path = save_path, save_day = save_day, return_grid = FALSE)
     
     # remove main vars
@@ -393,12 +408,8 @@ topo.sw.monthly.save.wrapper <- function(start_month = NULL, end_month = NULL, y
 
 
 
-
-
-
-
 # # # # # # # # # # # # # # # # # # # # # # # #
-# Additional Functions # # # # # # # # # # # #
+# Additional HELPER Functions # # # # # # # # # 
 # # # # # # # # # # # # # # # # # # # # # # # #
 
 ###############################################
@@ -503,6 +514,14 @@ vnormalize_1 <- function(data_vector, a = -1, b = 1){
 }
 
 ###############################################
+rnormalize_1 <- function(data_raster, a = -1, b = 1){
+  # normalize vector between range a and b
+  dmin <- cellStats(data_raster, min, na.rm = T)
+  dmax <- cellStats(data_raster, max, na.rm = T)
+  (b - a) * ( (data_raster - dmin) / ( dmax - dmin ) ) + a
+}
+
+###############################################
 gauss.window <- function(sigma=2, n=5) { #(spatialEco)
   m <- matrix(ncol=n, nrow=n)
   mcol <- rep(1:n, n)
@@ -538,4 +557,40 @@ filter.shade <- function(sh, dem, shade_size_filter = 40){
   shdd <- !shf
   return(as.matrix(shdd))
 }
+
+
+# # # # # # # # #
+# POST-functions
+
+###############################################
+seasonal_vals3_5 <- function(seasonal_path, s1 = 3, s2 = 4, s3 = 5, s4 = NULL, s5 = NULL){
+  #
+  # default: MAM (others: DJF, MAM, JJA, SON, MJJAS)
+  # combine monthly data into seasonal information
+  # at minimum 3 seasons must be specified
+  # up to 5 seasons may be provided
+  #
+  # optional seasons
+  if(!is.null(s4)){
+    s4_norm <- stack(seasonal_path[s4])[[1]]; s4_topo <- stack(seasonal_path[s4])[[2]]; s4_shade <- stack(seasonal_path[s4])[[5]]
+  }else{s4_norm <- 0; s4_topo <- 0; s4_shade <- 0}
+  # optional seasons
+  if(!is.null(s5)){
+    s5_norm <- stack(seasonal_path[s5])[[1]]; s5_topo <- stack(seasonal_path[s5])[[2]]; s5_shade <- stack(seasonal_path[s5])[[5]]
+  }else{s5_norm <- 0; s5_topo <- 0; s5_shade <- 0}
+  #
+  # CALCULATE SEASONAL VALUES
+  season_norm = stack(seasonal_path[s1])[[1]] + stack(seasonal_path[s2])[[1]] + stack(seasonal_path[s3])[[1]] + s4_norm + s5_norm
+  season_topo = stack(seasonal_path[s1])[[2]] + stack(seasonal_path[s2])[[2]] + stack(seasonal_path[s3])[[2]] + s4_topo + s5_topo
+  season_shade = stack(seasonal_path[s1])[[5]] + stack(seasonal_path[s2])[[5]] + stack(seasonal_path[s3])[[5]] + s4_shade + s5_shade
+  # final values
+  seas_shade_sum <-  season_shade / 4   # hours of shade
+  seas_topo_factor <- season_topo / season_norm
+  seas_topo_f1 <- rnormalize_1(seas_topo_factor)
+  # final
+  new_stk <- stack(season_topo, seas_topo_factor, seas_topo_f1, seas_shade_sum)
+  names(new_stk) <- c("tot_insol", "topo_factor", "topo_norm", "shade_hrs")
+  return(new_stk)
+}
+
 
