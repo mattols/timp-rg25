@@ -8,15 +8,20 @@
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
 require(insol);require(raster);require(rgdal);require(rgeos)
-require(ncdf4); require(sp);require(dplyr);require(ggplot2)
+require(sp);require(dplyr)
+# require(ggplot2)
+# require(ncdf4)
 
 # wasatch grid
 dpath = "~/data/timp/dem_20m/Wstch_gtr_2400m_20m_grid.tif"
+vpath = "~/data/timp/dem_20m/Wstch_gtr_2400m_20m_svf.tif"
 # may need to be split?
 
 # WORKSPACE STORAGE
 timp_storage = "~/olson/glacier-data/rg-wasatch/timp" # UVU group
+rg_storage <- "~/olson/glacier-data/rg-wasatch/central_wasatch"
 ftype = ".tif" # ".grd"
+sub_folder = "tf_series" # For multiday
 # "~/molson/" 
 # ls ~/olson/glacier-data/rg-wasatch/timp/tf_series
 # cp -a ~/olson/glacier-data/rg-wasatch/timp/tf_series /uufs/chpc.utah.edu/common/home/u1037042/data/timp/rad_results
@@ -33,7 +38,7 @@ ftype = ".tif" # ".grd"
 ###############################################
 # 0. DEM-BOUNDS
 # set initial area and conditions (based on DEM)
-topo.bounds <- function(dpath, subset=TRUE){
+topo.bounds <- function(dpath, vpath = NULL, subset=TRUE){
   #
   # returns
   # dem, viewf, dpoly
@@ -43,10 +48,10 @@ topo.bounds <- function(dpath, subset=TRUE){
   if(subset){
     # 
     # Cottonwoods and Timpanogos
-    pts = cbind(445079.2, 4487065) # subset DEM
-    pt = SpatialPoints(coords = pts, proj4string = crs(dem))
-    b1 = buffer(pt, 2.1e4)
-    dem <<- crop(dem, b1)
+    # pts = cbind(445079.2, 4487065) # subset DEM
+    # pt = SpatialPoints(coords = pts, proj4string = crs(dem))
+    # b1 = buffer(pt, 2.1e4)
+    # dem <<- crop(dem, b1)
     
     # Only Timpanogos
     # pts = cbind(445173.4, 4471190) # subset DEM to Timp
@@ -56,10 +61,33 @@ topo.bounds <- function(dpath, subset=TRUE){
     # dem <<- crop(dem, b1)
     
     # Central Wasatch
-    # pts = cbind(445079.2, 4479300) # subset DEM 
+    # pts = cbind(445079.2, 4479300) # subset DEM
     # pt = SpatialPoints(coords = pts, proj4string = crs(dem))
     # b1 = buffer(pt, 3.1e4)
     # dem <<- crop(dem, b1)
+    
+    # Southern Wasatch
+    # b1 <- extent(c(412372.6, 465152.6, 4403026, 4448300))
+    # dem <<- crop(dem, b1)
+    
+    # Northern Wasatch 1
+    b1 <- extent(c(412372.6, 465152.6, 4510300, 4567212))
+    dem <<- crop(dem, b1)
+    
+    # Northern Wasatch 2
+    # b1 <- extent(c(412372.6, 465152.6, 4567212, 4617186))
+    # dem <<- crop(dem, b1)
+    
+    # trim to NA values in scene
+    non_na_cells <- which(!is.na(values(dem)))
+    coords <- xyFromCell(dem, non_na_cells)
+    longitudes <- coords[, 1]
+    min_longitude <- min(longitudes); max_longitude <- max(longitudes)
+    latitudes <- coords[, 2]
+    min_latitudes <- min(latitudes); max_latitudes <- max(latitudes)
+    b2 = extent(c(min_longitude, max_longitude, min_latitudes, max_latitudes)) # b1@bbox[2, 1], b1@bbox[2, 2])) # xmin, xmax, ymin, ymax
+    dem <<- crop(dem, b2)
+    
   }
   
   # BOUNDARY - for computational spatial trasformations
@@ -72,7 +100,17 @@ topo.bounds <- function(dpath, subset=TRUE){
   # view factor
   dl <<-  res(dem)[1]
   d_mat <<- as.matrix(dem)
-  viewf <<- view.factor(dem_mat = d_mat, dem = dem, dem_res = dl) 
+  if(!is.null(vpath)){ # create view factor if none supplied
+    view_rast <<- raster(vpath)
+    if(subset){
+      view_rast <<- crop(view_rast, dem)
+    }
+    viewf <<- as.matrix(view_rast) 
+  }else{viewf <<- view.factor(dem_mat = d_mat, dem = dem, dem_res = dl) }
+  
+  # non-NA values
+  # dem_NA_idx <<- !is.na(values(dem))
+  # dem_NA_len <<- sum(dem_NA_idx)
 }
 
 
@@ -126,10 +164,15 @@ clear.sky.sw.topo <- function(dem, dpoly, local_seq, save_path=NULL, single_day 
   az_noon = which.min(abs(180-sunpos(sv))[,1])
   azimuth_eq = c(sunpos(sv)[,1][1:az_noon]-180,sunpos(sv)[,1][(az_noon+1):length(sunpos(sv)[,1])]-180)
   
-  # SAVE empty rays
+  # # SAVE empty rays
   insol_norm <- matrix(NA, nrow = ncell(dem), ncol = length(zenith))
   insol_topo <- matrix(NA, nrow = ncell(dem), ncol = length(zenith))
   shade_arr <- matrix(NA, nrow = ncell(dem), ncol = length(zenith))
+  
+  # EMPTY rays (no NA)
+  # insol_norm <- matrix(NA, nrow = dem_NA_len, ncol = length(zenith))
+  # insol_topo <- matrix(NA, nrow = dem_NA_len, ncol = length(zenith))
+  # shade_arr <- matrix(NA, nrow = dem_NA_len, ncol = length(zenith))
   
   # LOOP
   for (i in 1:length(zenith)){
@@ -178,6 +221,11 @@ clear.sky.sw.topo <- function(dem, dpoly, local_seq, save_path=NULL, single_day 
     insol_norm[, i] <- sw0
     insol_topo[, i] <- sw3
     shade_arr[, i] <- !sh
+    
+    # add to no-NA dataframe
+    # insol_norm[, i] <- as.array(sw0)[dem_NA_idx]
+    # insol_topo[, i] <- as.array(sw3)[dem_NA_idx]
+    # shade_arr[, i] <- as.array(!sh)[dem_NA_idx]
   }
   
   # CALC topographic factor
@@ -190,7 +238,7 @@ clear.sky.sw.topo <- function(dem, dpoly, local_seq, save_path=NULL, single_day 
   # STACK AND SAVE
   if(!is.null(save_path)){
     # stack
-    small_grid = FALSE
+    small_grid = TRUE
     topo_stk <- stack(array.to.raster(day_topo_sum, dem, small=small_grid),
                       array.to.raster(day_topo_factor, dem, small=small_grid),
                       array.to.raster(day_topo_f1, dem, small=small_grid),
@@ -208,7 +256,7 @@ clear.sky.sw.topo <- function(dem, dpoly, local_seq, save_path=NULL, single_day 
   if(single_day){
     if(!exists("topo_stk")){
       # stack and return
-      small_grid = FALSE
+      small_grid = TRUE
       topo_stk <- stack(array.to.raster(day_topo_sum, dem, small=small_grid),
                         array.to.raster(day_topo_factor, dem, small=small_grid),
                         array.to.raster(day_topo_f1, dem, small=small_grid),
@@ -300,10 +348,15 @@ topo.sw.multiday.wrapper <- function(month = "03", year = "2021", dpath, start_d
   # check length for computation
   if((length(dates_ls)>32) ){stop("! Periods beyond a month are currently discouraged")} # & !is.null(save_day)
   
-  # SAVE empty rays
+  # SAVE empty rays (OLD)
   insol_norm_month <- matrix(NA, nrow = ncell(dem), ncol = length(dates_ls))
   insol_topo_month <- matrix(NA, nrow = ncell(dem), ncol = length(dates_ls))
   shade_arr_month <- matrix(NA, nrow = ncell(dem), ncol = length(dates_ls))
+  
+  # EMPTY rays (no NA)
+  # insol_norm_month <- matrix(NA, nrow = dem_NA_len, ncol = length(dates_ls))
+  # insol_topo_month <- matrix(NA, nrow = dem_NA_len, ncol = length(dates_ls))
+  # shade_arr_month <- matrix(NA, nrow = dem_NA_len, ncol = length(dates_ls))
   
   for(dl in 1:length(dates_ls)){
     print(paste("...processing day", dl, "of", length(dates_ls), " | ", 
@@ -318,6 +371,11 @@ topo.sw.multiday.wrapper <- function(month = "03", year = "2021", dpath, start_d
     insol_norm_month[, dl] <- day_mat[, 1]
     insol_topo_month[, dl] <- day_mat[, 2]
     shade_arr_month[, dl] <- day_mat[, 3]
+    
+    # new 
+    # insol_norm_month[, dl] <- day_mat[dem_NA_idx, 1]
+    # insol_topo_month[, dl] <- day_mat[dem_NA_idx]
+    # shade_arr_month[, dl] <- day_mat[dem_NA_idx, 3]
     
     # remove main vars
     # rm(list=setdiff(ls(), c('except these...') ) )
@@ -356,7 +414,7 @@ topo.sw.multiday.wrapper <- function(month = "03", year = "2021", dpath, start_d
     dmoment_char <- paste0("tf_series_m", format(dates_ls[1], "%m"))
     sname = paste0("clearsky_", dmoment_char,  ftype)
     # save
-    writeRaster(topo_stk, file.path(save_path, "tf_series2", sname))
+    writeRaster(topo_stk, file.path(save_path, sub_folder, sname))
   }
   
   # end time
@@ -456,6 +514,18 @@ array.to.raster <- function(array, dem, small=FALSE){
     ar_mat <- t(matrix(array,nrow=nrow(dem),ncol=ncol(dem), byrow = T))
   }else{
     ar_mat <- matrix(array,nrow=nrow(dem),ncol=ncol(dem), byrow = F)
+  }
+  return(make.raster(ar_mat, dem))
+}
+
+###############################################
+array.to.raster2 <- function(array, dem, small=FALSE){
+  # adjusts for raster NA values
+  array_d = as.array(dem); array_d[which(dem_NA_idx)] = array  
+  if(small){
+    ar_mat <- t(matrix(array_d,nrow=nrow(dem),ncol=ncol(dem), byrow = T))
+  }else{
+    ar_mat <- matrix(array_d,nrow=nrow(dem),ncol=ncol(dem), byrow = F)
   }
   return(make.raster(ar_mat, dem))
 }
@@ -593,4 +663,63 @@ seasonal_vals3_5 <- function(seasonal_path, s1 = 3, s2 = 4, s3 = 5, s4 = NULL, s
   return(new_stk)
 }
 
+###############################################
+# ISSUES
+# Error in .rasterObjectFromFile(x, objecttype = "RasterBrick", ...) : 
+#   Cannot create a RasterLayer object from this file.
+seasonal_wrap_standard <- function(fpath, sub_folder){
+  #
+  # standard months: DJF, MAM, JJA, SON, MJJAS
+  # run and save monthly data
+  #
+  s_files <- list.files(fpath, full.names = T)
+  # standard seasons
+  djf = seasonal_vals3_5(seasonal_path = s_files, s1=12, s2=1, s3=2)
+  mam = seasonal_vals3_5(seasonal_path = s_files, s1=3, s2=4, s3=5)
+  jja = seasonal_vals3_5(seasonal_path = s_files, s1=6, s2=7, s3=8)
+  son = seasonal_vals3_5(seasonal_path = s_files, s1=9, s2=10, s3=11)
+  mjjas = seasonal_vals3_5(seasonal_path = s_files, s1=5, s2=6, s3=7, s4=8, s5=9)
+  # SAVE
+  seas_name = c("DJF","MAM","JJA","SON","MJJAS")
+  ss = list(djf, mam, jja, son, mjjas)
+  for(s in 1:length(seas_name)){
+    writeRaster(ss[[s]], paste0(file.path(fpath, "clearsky_tf_season_"), seas_name[s], ".tif") )
+    # writeRaster(son, paste0(file.path(fpath, sub_folder, "clearsky_tf_season_"), seas_name, ".tif") )
+  }
+  print("Seasonal files saved!")
+}
+
+###############################################
+mosaic.month.save <- function(month_list, base_path, sub_fls, save_path){
+  #
+  # save monthly merge
+  for (m in month_list){
+    #
+    ml = nchar( trunc( abs(m) ) )
+    if (ml<2){mchar = paste0("0", m)}else{mchar = as.character(m)}
+    print(paste("Merging month", mchar))
+    # merge month
+    month_rast <- mosaic.month.region(mchar, base_path, sub_fls)
+    names(month_rast) <- c("norm_insol", "tot_insol", "topo_factor", "topo_norm", "shade_hrs")
+    #
+    writeRaster(month_rast, file.path(save_path, paste0("clearsky_tf_m", mchar, ".tif")) )
+  }
+}
+
+###############################################
+mosaic.month.region <- function(month_char, base_path, sub_fls){
+  # 
+  # merge all rasters from same month
+  #
+  # list files for given month
+  mfpths <- list.files(file.path(base_path, fls,"tf_series/"),
+                       pattern = month_char, full.names = TRUE)
+  # perform merge
+  mr <- do.call(merge, lapply(mfpths, function(r) stack(r)) )
+  # extend and name
+  month_rast = extend(mr, dem)
+  names(month_rast) <- c("norm_insol", "tot_insol", "topo_factor", "topo_norm", "shade_hrs")
+  
+  return(month_rast)
+}
 
